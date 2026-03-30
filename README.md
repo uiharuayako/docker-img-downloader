@@ -80,6 +80,8 @@ keep_downloaded_files: false
 download_cache_dir: ./data/cache
 ```
 
+如果不配置 `allowed_source_registries`，则默认允许任意来源 registry 的镜像。
+
 推荐使用 `.env` 文件，而不是每次手动在 PowerShell 中设置环境变量。
 
 在项目根目录创建 `.env`，可以直接参考：`/Users/uiharu/code/docker_img_downloader/.env.example:1`

@@ -3,7 +3,12 @@ from fastapi.testclient import TestClient
 from docker_img_downloader.sync_service import create_app
 
 
-def write_config(tmp_path, extra_lines: list[str] | None = None):
+def write_config(
+    tmp_path,
+    extra_lines: list[str] | None = None,
+    *,
+    include_allowed_source_registries: bool = True,
+):
     config_path = tmp_path / "service.yaml"
     lines = [
         "harbor_registry: harbor.intra.local",
@@ -13,12 +18,17 @@ def write_config(tmp_path, extra_lines: list[str] | None = None):
         "listen_host: 127.0.0.1",
         "listen_port: 8080",
         "platform: linux/amd64",
-        "allowed_source_registries:",
-        "  - docker.io",
-        "  - ghcr.io",
         "crane_path: crane.exe",
         f"task_store_path: {tmp_path / 'tasks.json'}",
     ]
+    if include_allowed_source_registries:
+        lines.extend(
+            [
+                "allowed_source_registries:",
+                "  - docker.io",
+                "  - ghcr.io",
+            ]
+        )
     if extra_lines:
         lines.extend(extra_lines)
     config_path.write_text("\n".join(lines), encoding="utf-8")
@@ -100,6 +110,22 @@ services:
         "ghcr.io/example/app:v1",
     ]
     assert len(payload["tasks"]) == 2
+
+
+def test_sync_allows_any_registry_when_allowlist_is_not_configured(monkeypatch, tmp_path) -> None:
+    config_path = write_config(tmp_path, include_allowed_source_registries=False)
+    monkeypatch.setenv("DOCKER_IMG_DOWNLOADER_CONFIG", str(config_path))
+
+    app = create_app()
+    manager = app.state.manager
+    monkeypatch.setattr(manager, "_run_command", lambda *args, **kwargs: None)
+    client = TestClient(app)
+
+    response = client.post("/sync", json={"source_image": "quay.io/prometheus/node-exporter:v1.8.2"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_image"] == "quay.io/prometheus/node-exporter:v1.8.2"
 
 
 def test_loads_env_file_for_config(monkeypatch, tmp_path) -> None:

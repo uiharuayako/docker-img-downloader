@@ -32,7 +32,7 @@ class ServiceConfig:
     listen_host: str = "0.0.0.0"
     listen_port: int = 8080
     platform: str = "linux/amd64"
-    allowed_source_registries: list[str] = field(default_factory=lambda: ["docker.io", "ghcr.io"])
+    allowed_source_registries: list[str] = field(default_factory=list)
     registry_mirrors: dict[str, list[str]] = field(default_factory=dict)
     crane_path: str = "crane.exe"
     harbor_scheme: str = "https"
@@ -41,6 +41,12 @@ class ServiceConfig:
     request_timeout_seconds: int = 30
     keep_downloaded_files: bool = False
     download_cache_dir: str = "data/cache"
+
+    def __post_init__(self) -> None:
+        if self.allowed_source_registries is None:
+            self.allowed_source_registries = []
+        else:
+            self.allowed_source_registries = [registry.lower() for registry in self.allowed_source_registries]
 
 
 def load_yaml(path: str | Path) -> dict[str, Any]:

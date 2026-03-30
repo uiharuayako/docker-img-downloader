@@ -611,7 +611,7 @@ class TaskManager:
 
     def submit(self, source_image: str) -> SyncTask:
         parsed = parse_image_reference(source_image)
-        if parsed.registry not in self.config.allowed_source_registries:
+        if self.config.allowed_source_registries and parsed.registry not in self.config.allowed_source_registries:
             allowed = ", ".join(self.config.allowed_source_registries)
             raise ValueError(f"Registry '{parsed.registry}' is not allowed. Allowed: {allowed}")
 

@@ -8,6 +8,7 @@ platform: linux/amd64
 allowed_source_registries:
   - docker.io
   - ghcr.io
+# 省略 `allowed_source_registries` 则允许任意来源 registry
 registry_mirrors:
   docker.io:
     - docker.m.daocloud.io
