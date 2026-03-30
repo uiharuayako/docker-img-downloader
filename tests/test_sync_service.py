@@ -125,3 +125,40 @@ services:
         "ghcr.io/example/app:v1",
     ]
     assert len(payload["tasks"]) == 2
+
+
+def test_loads_env_file_for_config(monkeypatch, tmp_path) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "HARBOR_USERNAME=env-user@example.com",
+                "HARBOR_PASSWORD=env-password",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    config_path = config_dir / "service.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "harbor_registry: harbor.intra.local",
+                "harbor_project: mirror",
+                "harbor_username: ${HARBOR_USERNAME}",
+                "harbor_password: ${HARBOR_PASSWORD}",
+                "listen_host: 127.0.0.1",
+                "listen_port: 8080",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("HARBOR_USERNAME", raising=False)
+    monkeypatch.delenv("HARBOR_PASSWORD", raising=False)
+    monkeypatch.setenv("DOCKER_IMG_DOWNLOADER_CONFIG", str(config_path))
+
+    app = create_app()
+
+    assert app.state.config.harbor_username == "env-user@example.com"
+    assert app.state.config.harbor_password == "env-password"

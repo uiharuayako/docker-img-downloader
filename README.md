@@ -77,7 +77,28 @@ verify_tls: true
 task_store_path: ./data/tasks.json
 ```
 
-推荐将 Harbor 凭据放到环境变量中：
+推荐使用 `.env` 文件，而不是每次手动在 PowerShell 中设置环境变量。
+
+在项目根目录创建 `.env`，可以直接参考：`/Users/uiharu/code/docker_img_downloader/.env.example:1`
+
+```dotenv
+HARBOR_USERNAME=your-email@company.com
+HARBOR_PASSWORD=your-harbor-password
+HTTP_PROXY=http://proxy.example.com:7890
+HTTPS_PROXY=http://proxy.example.com:7890
+NO_PROXY=harbor.intra.local,127.0.0.1,localhost
+```
+
+服务启动时会自动按下面顺序查找 `.env`：
+
+- `config/.env`
+- 项目根目录 `.env`
+
+如果找到了，就会自动加载；因此 Windows 端**不需要每次运行都手动配置环境变量**。
+
+如果你仍想临时覆盖，也可以继续在 PowerShell 里设置同名环境变量；显式设置的系统环境变量优先级更高。
+
+也可以继续手动设置环境变量：
 
 ```powershell
 $env:HARBOR_USERNAME = "robot$mirror"
@@ -113,6 +134,8 @@ $env:NO_PROXY = "harbor.intra.local,127.0.0.1,localhost"
 ### 3. 启动 Windows 服务
 
 - 在项目根目录执行：
+- 推荐先准备好 `.env`
+- 然后在项目根目录执行：
 
 ```powershell
 python -m docker_img_downloader.sync_service --config config/service.yaml
@@ -316,6 +339,14 @@ imgsync-compose \
 推荐按下面顺序调试，问题定位最快。
 
 ### 1. 仅测服务是否启动
+
+如果使用 `.env`，先复制示例文件：
+
+```powershell
+Copy-Item .env.example .env
+```
+
+然后把里面的 Harbor 和代理参数改成你的实际值，再启动服务。
 
 ```powershell
 curl http://127.0.0.1:8080/healthz

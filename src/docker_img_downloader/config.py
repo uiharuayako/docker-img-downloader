@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import load_dotenv
 
 
 ENV_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)\}")
@@ -41,11 +42,24 @@ class ServiceConfig:
 
 
 def load_yaml(path: str | Path) -> dict[str, Any]:
-    with Path(path).expanduser().resolve().open("r", encoding="utf-8") as file:
+    config_path = Path(path).expanduser().resolve()
+    load_dotenv(find_dotenv_for_config(config_path), override=False)
+    with config_path.open("r", encoding="utf-8") as file:
         data = yaml.safe_load(file) or {}
     if not isinstance(data, dict):
         raise ValueError(f"Expected mapping in {path}, got {type(data).__name__}")
     return expand_env_vars(data)
+
+
+def find_dotenv_for_config(config_path: Path) -> str | None:
+    candidates = [
+        config_path.parent / ".env",
+        config_path.parent.parent / ".env",
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return str(candidate)
+    return None
 
 
 def load_service_config(path: str | Path) -> ServiceConfig:
