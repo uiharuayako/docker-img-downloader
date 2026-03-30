@@ -17,3 +17,5 @@ harbor_scheme: https
 verify_tls: true
 task_store_path: ./data/tasks.json
 request_timeout_seconds: 30
+keep_downloaded_files: false
+download_cache_dir: ./data/cache

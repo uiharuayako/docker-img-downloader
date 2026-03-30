@@ -151,6 +151,8 @@ def test_dashboard_page_is_served(monkeypatch, tmp_path) -> None:
     assert response.status_code == 200
     assert "Harbor Sync Dashboard" in response.text
     assert "任务列表" in response.text
+    assert "上传 YAML 文件" in response.text
+    assert "手动发送 `/sync` 请求" in response.text
 
 
 def test_api_lists_tasks_with_progress_fields(monkeypatch, tmp_path) -> None:
@@ -200,3 +202,44 @@ def test_api_lists_tasks_with_progress_fields(monkeypatch, tmp_path) -> None:
     assert "phase" in task
     assert "progress_percent" in task
     assert "speed_bytes_per_sec" in task
+
+
+def test_sync_can_keep_local_artifact(monkeypatch, tmp_path) -> None:
+    config_path = write_config(
+        tmp_path,
+        extra_lines=[
+            "keep_downloaded_files: true",
+            f"download_cache_dir: {tmp_path / 'cache'}",
+        ],
+    )
+    monkeypatch.setenv("DOCKER_IMG_DOWNLOADER_CONFIG", str(config_path))
+
+    app = create_app()
+    manager = app.state.manager
+    recorded_commands: list[list[str]] = []
+
+    def fake_run(task_id, command, failure_prefix, **kwargs):
+        recorded_commands.append(command)
+        if "pull" in command:
+            manager._update_task(
+                task_id,
+                phase="exporting",
+                append_log="artifact exported",
+                local_artifact_path=command[-1],
+            )
+        return None
+
+    monkeypatch.setattr(manager, "_run_command", fake_run)
+    client = TestClient(app)
+
+    response = client.post("/sync", json={"source_image": "docker.io/library/nginx:1.27.4"})
+    assert response.status_code == 200
+    task_id = response.json()["task_id"]
+
+    detail_response = client.get(f"/api/tasks/{task_id}")
+    assert detail_response.status_code == 200
+    payload = detail_response.json()
+
+    assert payload["local_artifact_path"]
+    assert payload["local_artifact_path"].endswith(".tar")
+    assert any(command[1] == "pull" for command in recorded_commands)

@@ -76,6 +76,8 @@ crane_path: C:/tools/crane.exe
 harbor_scheme: https
 verify_tls: true
 task_store_path: ./data/tasks.json
+keep_downloaded_files: false
+download_cache_dir: ./data/cache
 ```
 
 推荐使用 `.env` 文件，而不是每次手动在 PowerShell 中设置环境变量。
@@ -124,6 +126,21 @@ registry_mirrors:
 
 这里的镜像站应当是兼容 Registry API 的站点，写法是“registry host”，不要带 `https://`。
 
+如果希望 Windows 在同步完成后额外保留一份本地镜像 tar，可打开下面两个配置：
+
+```yaml
+keep_downloaded_files: true
+download_cache_dir: ./data/cache
+```
+
+行为说明：
+
+- 默认是 `false`，也就是只推送到 Harbor，不在本地保留文件
+- 打开后，服务会在镜像成功推送到 Harbor 后，再执行一次 `crane pull` 导出 tar
+- 导出的 tar 会保存在 `download_cache_dir`
+- 任务详情和网页看板里会显示 `local_artifact_path`
+- 这不是“临时文件不删除”，而是显式增加一份本地导出产物
+
 如果访问公网需要代理：
 
 ```powershell
@@ -156,9 +173,12 @@ harbor-sync-service --config config/service.yaml
 面板能力：
 
 - 查看任务列表、状态、阶段、当前来源镜像
+- 查看本地保留文件路径（如果启用了 `keep_downloaded_files`）
 - 查看最近进度百分比、累计字节、瞬时速度
 - 查看最近日志，便于判断是代理、上游源还是 Harbor 推送异常
-- 直接在网页里提交单镜像同步或 Compose YAML 批量同步
+- 直接在网页里提交单镜像同步
+- 直接在网页里粘贴 Compose YAML，或上传 `docker-compose.yaml` / `.yml` 文件后再提交
+- 直接在网页里手工构造 JSON，请求 `POST /sync` 做接口调试
 
 说明：
 

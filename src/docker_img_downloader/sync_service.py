@@ -68,6 +68,7 @@ class SyncTask:
     bytes_total: int | None = None
     speed_bytes_per_sec: float | None = None
     current_source: str | None = None
+    local_artifact_path: str | None = None
     logs: list[str] | None = None
     last_updated_at: str | None = None
 
@@ -100,6 +101,7 @@ class SyncTaskResponse(BaseModel):
     bytes_total: int | None = None
     speed_bytes_per_sec: float | None = None
     current_source: str | None = None
+    local_artifact_path: str | None = None
     logs: list[str]
     last_updated_at: str | None = None
 
@@ -154,9 +156,20 @@ def _detect_phase(line: str) -> str | None:
         return "copying"
     if "push" in lowered or "upload" in lowered or "writing" in lowered:
         return "pushing"
+    if "export" in lowered or "saving" in lowered:
+        return "exporting"
     if "done" in lowered or "complete" in lowered or "success" in lowered:
         return "succeeded"
     return None
+
+
+def build_artifact_path(cache_dir: str, source_image: str) -> Path:
+    parsed = parse_image_reference(source_image)
+    safe_repository = re.sub(r"[^a-zA-Z0-9._-]+", "__", parsed.repository)
+    safe_tag = re.sub(r"[^a-zA-Z0-9._-]+", "_", parsed.tag)
+    safe_registry = re.sub(r"[^a-zA-Z0-9._-]+", "_", parsed.registry)
+    filename = f"{safe_registry}__{safe_repository}__{safe_tag}.tar"
+    return Path(cache_dir).expanduser().resolve() / filename
 
 
 def render_dashboard_html() -> str:
@@ -299,7 +312,7 @@ def render_dashboard_html() -> str:
       <section class="panel stack">
         <div>
           <h1>Harbor Sync Dashboard</h1>
-          <div class="muted">查看任务状态、阶段、速度、最近日志。</div>
+          <div class="muted">查看任务状态、阶段、速度、最近日志，并可直接调试接口。</div>
         </div>
         <form id="sync-form" class="stack">
           <label>单个镜像
@@ -311,7 +324,18 @@ def render_dashboard_html() -> str:
           <label>docker-compose YAML
             <textarea id="compose-yaml" name="compose_yaml" placeholder="services:\n  web:\n    image: nginx:1.27.4"></textarea>
           </label>
+          <label>上传 YAML 文件
+            <input id="compose-file" type="file" accept=".yaml,.yml,text/yaml,text/x-yaml,.txt" />
+          </label>
+          <div class="muted" id="compose-file-hint">支持上传 `docker-compose.yaml` / `.yml`，读取后会自动填入文本框。</div>
           <button type="submit">按 Compose 同步</button>
+        </form>
+        <form id="manual-sync-form" class="stack">
+          <label>手动发送 `/sync` 请求
+            <textarea id="manual-sync-body" name="manual_sync_body" placeholder='{"source_image":"docker.io/library/nginx:1.27.4"}'></textarea>
+          </label>
+          <div class="muted">这里直接发送 JSON 到 `POST /sync`，便于调试请求体。</div>
+          <button type="submit">发送 /sync 请求</button>
         </form>
       </section>
       <section class="panel stack">
@@ -434,6 +458,10 @@ def render_dashboard_html() -> str:
             <div>${escapeHtml(task.current_source || "-")}</div>
           </div>
           <div>
+            <h3>本地文件</h3>
+            <div>${escapeHtml(task.local_artifact_path || "-")}</div>
+          </div>
+          <div>
             <h3>消息</h3>
             <div>${escapeHtml(task.message || "-")}</div>
           </div>
@@ -493,21 +521,55 @@ def render_dashboard_html() -> str:
       return data;
     }
 
+    function showError(error) {
+      const message = error instanceof Error ? error.message : String(error);
+      window.alert(message);
+    }
+
     document.getElementById("sync-form").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const sourceImage = document.getElementById("source-image").value.trim();
-      if (!sourceImage) return;
-      await submitJson("/sync", { source_image: sourceImage });
-      document.getElementById("source-image").value = "";
-      await refreshTasks();
+      try {
+        const sourceImage = document.getElementById("source-image").value.trim();
+        if (!sourceImage) return;
+        await submitJson("/sync", { source_image: sourceImage });
+        document.getElementById("source-image").value = "";
+        await refreshTasks();
+      } catch (error) {
+        showError(error);
+      }
     });
 
     document.getElementById("compose-form").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const composeYaml = document.getElementById("compose-yaml").value.trim();
-      if (!composeYaml) return;
-      await submitJson("/sync/compose", { compose_yaml: composeYaml });
-      await refreshTasks();
+      try {
+        const composeYaml = document.getElementById("compose-yaml").value.trim();
+        if (!composeYaml) return;
+        await submitJson("/sync/compose", { compose_yaml: composeYaml });
+        await refreshTasks();
+      } catch (error) {
+        showError(error);
+      }
+    });
+
+    document.getElementById("compose-file").addEventListener("change", async (event) => {
+      const [file] = event.target.files || [];
+      if (!file) return;
+      const text = await file.text();
+      document.getElementById("compose-yaml").value = text;
+      document.getElementById("compose-file-hint").textContent = `已加载文件：${file.name}`;
+    });
+
+    document.getElementById("manual-sync-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        const rawBody = document.getElementById("manual-sync-body").value.trim();
+        if (!rawBody) return;
+        const payload = JSON.parse(rawBody);
+        await submitJson("/sync", payload);
+        await refreshTasks();
+      } catch (error) {
+        showError(error);
+      }
     });
 
     document.getElementById("refresh-button").addEventListener("click", refreshTasks);
@@ -603,6 +665,7 @@ class TaskManager:
         bytes_total: int | None = None,
         speed_bytes_per_sec: float | None = None,
         current_source: str | None = None,
+        local_artifact_path: str | None = None,
         append_log: str | None = None,
     ) -> SyncTask:
         with self._lock:
@@ -628,6 +691,8 @@ class TaskManager:
                 task.speed_bytes_per_sec = speed_bytes_per_sec
             if current_source is not None:
                 task.current_source = current_source
+            if local_artifact_path is not None:
+                task.local_artifact_path = local_artifact_path
             if append_log:
                 task.logs.append(append_log)
                 if len(task.logs) > MAX_LOG_LINES:
@@ -647,7 +712,8 @@ class TaskManager:
         try:
             with self._copy_lock:
                 self._ensure_harbor_login(task_id)
-                self._copy_image(task_id, task.source_image, task.target_image)
+                copied_source = self._copy_image(task_id, task.source_image, task.target_image)
+                self._maybe_export_artifact(task_id, copied_source)
             self._update_task(
                 task_id,
                 status=TASK_STATUS_SUCCEEDED,
@@ -682,7 +748,7 @@ class TaskManager:
         ]
         self._run_command(task_id, command, "Harbor login failed", phase="login", sensitive=True)
 
-    def _copy_image(self, task_id: str, source_image: str, target_image: str) -> None:
+    def _copy_image(self, task_id: str, source_image: str, target_image: str) -> str:
         parsed = parse_image_reference(source_image)
         mirror_candidates = self.config.registry_mirrors.get(parsed.registry, [])
         source_candidates = [replace_registry(source_image, mirror) for mirror in mirror_candidates]
@@ -707,11 +773,40 @@ class TaskManager:
             ]
             try:
                 self._run_command(task_id, command, f"Image copy failed for source {candidate}", phase="copying", current_source=candidate)
-                return
+                return candidate
             except RuntimeError as exc:
                 errors.append(str(exc))
 
         raise RuntimeError(" | ".join(errors))
+
+    def _maybe_export_artifact(self, task_id: str, source_image: str) -> None:
+        if not self.config.keep_downloaded_files:
+            return
+
+        artifact_path = build_artifact_path(self.config.download_cache_dir, source_image)
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        self._update_task(
+            task_id,
+            phase="exporting",
+            message=f"Exporting local image artifact to {artifact_path}.",
+            local_artifact_path=str(artifact_path),
+            append_log=f"Exporting local artifact to {artifact_path}",
+        )
+        command = [
+            self.config.crane_path,
+            "pull",
+            "--platform",
+            self.config.platform,
+            source_image,
+            str(artifact_path),
+        ]
+        self._run_command(
+            task_id,
+            command,
+            f"Artifact export failed for source {source_image}",
+            phase="exporting",
+            current_source=source_image,
+        )
 
     def _run_command(
         self,

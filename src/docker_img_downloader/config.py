@@ -39,6 +39,8 @@ class ServiceConfig:
     verify_tls: bool = True
     task_store_path: str = "data/tasks.json"
     request_timeout_seconds: int = 30
+    keep_downloaded_files: bool = False
+    download_cache_dir: str = "data/cache"
 
 
 def load_yaml(path: str | Path) -> dict[str, Any]:
