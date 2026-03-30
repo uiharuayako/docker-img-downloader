@@ -1,0 +1,19 @@
+harbor_registry: harbor.intra.local
+harbor_project: mirror
+harbor_username: ${HARBOR_USERNAME}
+harbor_password: ${HARBOR_PASSWORD}
+listen_host: 0.0.0.0
+listen_port: 8080
+platform: linux/amd64
+allowed_source_registries:
+  - docker.io
+  - ghcr.io
+registry_mirrors:
+  docker.io:
+    - docker.m.daocloud.io
+    - dockerproxy.cn
+crane_path: C:/tools/crane.exe
+harbor_scheme: https
+verify_tls: true
+task_store_path: ./data/tasks.json
+request_timeout_seconds: 30

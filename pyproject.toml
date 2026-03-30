@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "docker-img-downloader"
+version = "0.1.0"
+description = "On-demand image backfill from Windows to Harbor with a Linux pull wrapper."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115.0,<1.0.0",
+  "PyYAML>=6.0.1,<7.0.0",
+  "requests>=2.32.0,<3.0.0",
+  "uvicorn>=0.30.0,<1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27.0,<1.0.0",
+  "pytest>=8.2.0,<9.0.0",
+]
+
+[project.scripts]
+imgpull = "docker_img_downloader.imgpull:main"
+harbor-sync-service = "docker_img_downloader.sync_service:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
