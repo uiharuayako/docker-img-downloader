@@ -23,6 +23,7 @@ dev = [
 
 [project.scripts]
 imgpull = "docker_img_downloader.imgpull:main"
+imgsync-compose = "docker_img_downloader.imgsync_compose:main"
 harbor-sync-service = "docker_img_downloader.sync_service:main"
 
 [tool.setuptools]

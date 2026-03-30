@@ -14,6 +14,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from .compose_support import ComposeImageError, extract_images_from_compose_file, extract_images_from_compose_text, normalize_compose_images
 from .config import ServiceConfig, load_service_config
 from .image_ref import ImageReferenceError, build_target_image, parse_image_reference, replace_registry
 
@@ -57,6 +58,16 @@ class SyncTaskResponse(BaseModel):
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
+
+
+class ComposeSyncRequest(BaseModel):
+    compose_yaml: str | None = None
+    compose_file_path: str | None = None
+
+
+class ComposeSyncResponse(BaseModel):
+    images: list[str]
+    tasks: list[SyncTaskResponse]
 
 
 class TaskManager:
@@ -232,6 +243,25 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return serialize_task(task)
+
+    @app.post("/sync/compose", response_model=ComposeSyncResponse)
+    def create_compose_sync(request: ComposeSyncRequest) -> ComposeSyncResponse:
+        try:
+            if request.compose_yaml:
+                images = normalize_compose_images(extract_images_from_compose_text(request.compose_yaml))
+            elif request.compose_file_path:
+                images = normalize_compose_images(extract_images_from_compose_file(request.compose_file_path))
+            else:
+                raise HTTPException(status_code=400, detail="compose_yaml or compose_file_path is required.")
+
+            tasks = [serialize_task(manager.submit(image)) for image in images]
+            return ComposeSyncResponse(images=images, tasks=tasks)
+        except HTTPException:
+            raise
+        except (ComposeImageError, ImageReferenceError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.get("/tasks/{task_id}", response_model=SyncTaskResponse)
     def get_task(task_id: str) -> SyncTaskResponse:
