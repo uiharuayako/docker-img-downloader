@@ -7,6 +7,7 @@
 - `imgpull`：Linux 侧包装命令，输入完整公网镜像地址。
 - `imgsync-compose`：根据 `docker-compose.yaml` 批量提取镜像并触发 Windows 上传。
 - `harbor-sync-service`：Windows 侧轻量 HTTP 服务。
+- Web Dashboard：Windows 服务自带网页，可查看任务状态、阶段、速度、最近日志。
 - `docker_img_downloader.image_ref`：Linux / Windows 共用的镜像解析与 Harbor 映射规则。
 - `docker_img_downloader.compose_support`：Compose 镜像提取与规范化逻辑。
 
@@ -147,6 +148,23 @@ python -m docker_img_downloader.sync_service --config config/service.yaml
 harbor-sync-service --config config/service.yaml
 ```
 
+启动后可直接打开面板：
+
+- `http://127.0.0.1:8080/`
+- 局域网其他机器可访问：`http://<windows-ip>:8080/`
+
+面板能力：
+
+- 查看任务列表、状态、阶段、当前来源镜像
+- 查看最近进度百分比、累计字节、瞬时速度
+- 查看最近日志，便于判断是代理、上游源还是 Harbor 推送异常
+- 直接在网页里提交单镜像同步或 Compose YAML 批量同步
+
+说明：
+
+- 实时速度和字节进度依赖 `crane` 实际输出；如果某些版本/场景未输出数值，面板仍会显示阶段和日志
+- 当前实现通过流式读取 `crane` 标准输出获得实时状态，不再等命令结束后才更新
+
 ### 4. Linux 侧准备
 
 - 安装项目：
@@ -172,6 +190,12 @@ export HARBOR_PASSWORD='your-harbor-password'
 
 ```powershell
 curl http://127.0.0.1:8080/healthz
+```
+
+查看任务列表接口：
+
+```powershell
+curl http://127.0.0.1:8080/api/tasks
 ```
 
 ## Linux 侧使用
@@ -258,6 +282,92 @@ imgsync-compose \
 ```
 
 注意：`compose_file_path` 只适合 Windows 服务本机调试；如果 compose 文件在 Linux 上，推荐传 `compose_yaml`。
+
+## 本地调试流程
+
+下面流程适合先在 Windows 本机把链路跑通，再接 Linux。
+
+### 1. 启动服务
+
+```powershell
+python -m docker_img_downloader.sync_service --config config/service.yaml
+```
+
+### 2. 手动提交单镜像任务
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8080/sync ^
+  -H "Content-Type: application/json" ^
+  -d "{\"source_image\":\"docker.io/library/busybox:stable\"}"
+```
+
+返回示例：
+
+```json
+{
+  "task_id": "3e5c0b9d...",
+  "status": "queued",
+  "source_image": "docker.io/library/busybox:stable",
+  "target_image": "harbor.intra.local/mirror/dockerhub/library/busybox:stable",
+  "message": "Task queued."
+}
+```
+
+### 3. 轮询任务详情
+
+把上一步返回的 `task_id` 替换进去：
+
+```powershell
+curl.exe http://127.0.0.1:8080/api/tasks/3e5c0b9d...
+```
+
+重点字段：
+
+- `status`：`queued / running / succeeded / failed`
+- `phase`：如 `login / copying / pushing / succeeded / failed`
+- `progress_percent`：最近一次解析到的百分比
+- `speed_bytes_per_sec`：最近一次解析到的速度
+- `logs`：最近日志滚动窗口
+
+### 4. 直接打开网页看板
+
+浏览器访问：
+
+```text
+http://127.0.0.1:8080/
+```
+
+如果你主要是给内网 Linux 用户使用，建议把这个地址告诉他们，让他们直接看任务是否在下载、速度是否异常、是否卡在 Harbor 推送阶段。
+
+### 5. 手动调试 Compose 批量同步
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8080/sync/compose ^
+  -H "Content-Type: application/json" ^
+  -d "{\"compose_yaml\":\"services:\n  web:\n    image: nginx:1.27.4\n  redis:\n    image: redis:7\"}"
+```
+
+### 6. Linux 联调
+
+Windows 服务正常后，在 Linux 上执行：
+
+```bash
+imgpull docker.io/library/busybox:stable \
+  --harbor-registry harbor.intra.local \
+  --harbor-project mirror \
+  --windows-sync-url http://10.0.0.20:8080
+```
+
+或批量同步：
+
+```bash
+imgsync-compose \
+  --compose-file ./docker-compose.yaml \
+  --windows-sync-url http://10.0.0.20:8080 \
+  --wait
+```
+
+此时可以同时打开 Windows 面板观察任务进度，确认 Linux 是否只负责触发、真正的外网下载是否发生在 Windows 侧。
 
 ## Docker 镜像站支持
 

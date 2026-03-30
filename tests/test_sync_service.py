@@ -3,29 +3,36 @@ from fastapi.testclient import TestClient
 from docker_img_downloader.sync_service import create_app
 
 
-def test_healthz(monkeypatch, tmp_path) -> None:
+def write_config(tmp_path, extra_lines: list[str] | None = None):
     config_path = tmp_path / "service.yaml"
-    config_path.write_text(
-        "\n".join(
-            [
-                "harbor_registry: harbor.intra.local",
-                "harbor_project: mirror",
-                "harbor_username: user",
-                "harbor_password: pass",
-                "listen_host: 127.0.0.1",
-                "listen_port: 8080",
-                "platform: linux/amd64",
-                "allowed_source_registries:",
-                "  - docker.io",
-                "  - ghcr.io",
-                "registry_mirrors:",
-                "  docker.io:",
-                "    - docker.m.daocloud.io",
-                "crane_path: crane.exe",
-                "task_store_path: ./tasks.json",
-            ]
-        ),
-        encoding="utf-8",
+    lines = [
+        "harbor_registry: harbor.intra.local",
+        "harbor_project: mirror",
+        "harbor_username: user@example.com",
+        "harbor_password: pass",
+        "listen_host: 127.0.0.1",
+        "listen_port: 8080",
+        "platform: linux/amd64",
+        "allowed_source_registries:",
+        "  - docker.io",
+        "  - ghcr.io",
+        "crane_path: crane.exe",
+        f"task_store_path: {tmp_path / 'tasks.json'}",
+    ]
+    if extra_lines:
+        lines.extend(extra_lines)
+    config_path.write_text("\n".join(lines), encoding="utf-8")
+    return config_path
+
+
+def test_healthz(monkeypatch, tmp_path) -> None:
+    config_path = write_config(
+        tmp_path,
+        extra_lines=[
+            "registry_mirrors:",
+            "  docker.io:",
+            "    - docker.m.daocloud.io",
+        ],
     )
     monkeypatch.setenv("DOCKER_IMG_DOWNLOADER_CONFIG", str(config_path))
 
@@ -38,36 +45,23 @@ def test_healthz(monkeypatch, tmp_path) -> None:
 
 
 def test_sync_reuses_active_task_with_mirror_config(monkeypatch, tmp_path) -> None:
-    config_path = tmp_path / "service.yaml"
-    config_path.write_text(
-        "\n".join(
-            [
-                "harbor_registry: harbor.intra.local",
-                "harbor_project: mirror",
-                "harbor_username: user",
-                "harbor_password: pass",
-                "listen_host: 127.0.0.1",
-                "listen_port: 8080",
-                "platform: linux/amd64",
-                "allowed_source_registries:",
-                "  - docker.io",
-                "registry_mirrors:",
-                "  docker.io:",
-                "    - docker.m.daocloud.io",
-                "crane_path: crane.exe",
-                f"task_store_path: {tmp_path / 'tasks.json'}",
-            ]
-        ),
-        encoding="utf-8",
+    config_path = write_config(
+        tmp_path,
+        extra_lines=[
+            "registry_mirrors:",
+            "  docker.io:",
+            "    - docker.m.daocloud.io",
+        ],
     )
     monkeypatch.setenv("DOCKER_IMG_DOWNLOADER_CONFIG", str(config_path))
 
     app = create_app()
     manager = app.state.manager
 
-    def slow_run(*args, **kwargs):
+    def slow_run(task_id, *args, **kwargs):
         import time
 
+        manager._update_task(task_id, append_log="copy in progress", phase="copying")
         time.sleep(0.2)
         return None
 
@@ -83,26 +77,7 @@ def test_sync_reuses_active_task_with_mirror_config(monkeypatch, tmp_path) -> No
 
 
 def test_sync_compose_accepts_yaml(monkeypatch, tmp_path) -> None:
-    config_path = tmp_path / "service.yaml"
-    config_path.write_text(
-        "\n".join(
-            [
-                "harbor_registry: harbor.intra.local",
-                "harbor_project: mirror",
-                "harbor_username: user",
-                "harbor_password: pass",
-                "listen_host: 127.0.0.1",
-                "listen_port: 8080",
-                "platform: linux/amd64",
-                "allowed_source_registries:",
-                "  - docker.io",
-                "  - ghcr.io",
-                "crane_path: crane.exe",
-                f"task_store_path: {tmp_path / 'tasks-compose.json'}",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    config_path = write_config(tmp_path)
     monkeypatch.setenv("DOCKER_IMG_DOWNLOADER_CONFIG", str(config_path))
 
     app = create_app()
@@ -162,3 +137,66 @@ def test_loads_env_file_for_config(monkeypatch, tmp_path) -> None:
 
     assert app.state.config.harbor_username == "env-user@example.com"
     assert app.state.config.harbor_password == "env-password"
+
+
+def test_dashboard_page_is_served(monkeypatch, tmp_path) -> None:
+    config_path = write_config(tmp_path)
+    monkeypatch.setenv("DOCKER_IMG_DOWNLOADER_CONFIG", str(config_path))
+
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Harbor Sync Dashboard" in response.text
+    assert "任务列表" in response.text
+
+
+def test_api_lists_tasks_with_progress_fields(monkeypatch, tmp_path) -> None:
+    config_path = write_config(tmp_path)
+    monkeypatch.setenv("DOCKER_IMG_DOWNLOADER_CONFIG", str(config_path))
+
+    app = create_app()
+    manager = app.state.manager
+
+    def fake_run(task_id, command, failure_prefix, **kwargs):
+        if "auth" in command:
+            manager._update_task(task_id, phase="login", append_log="login ok")
+            return None
+        manager._update_task(
+            task_id,
+            phase="copying",
+            message="copying",
+            append_log="12 MiB / 24 MiB 50% 4 MiB/s",
+            progress_percent=50.0,
+            bytes_completed=12 * 1024 * 1024,
+            bytes_total=24 * 1024 * 1024,
+            speed_bytes_per_sec=4 * 1024 * 1024,
+            current_source="docker.io/library/nginx:1.27.4",
+        )
+        return None
+
+    monkeypatch.setattr(manager, "_run_command", fake_run)
+    client = TestClient(app)
+
+    submit_response = client.post("/sync", json={"source_image": "docker.io/library/nginx:1.27.4"})
+    assert submit_response.status_code == 200
+    task_id = submit_response.json()["task_id"]
+
+    detail_response = client.get(f"/api/tasks/{task_id}")
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert detail_payload["phase"] in {"copying", "succeeded"}
+    assert "logs" in detail_payload
+
+    list_response = client.get("/api/tasks")
+    assert list_response.status_code == 200
+    payload = list_response.json()
+    assert len(payload["tasks"]) == 1
+    task = payload["tasks"][0]
+    assert task["task_id"] == task_id
+    assert task["logs"]
+    assert "phase" in task
+    assert "progress_percent" in task
+    assert "speed_bytes_per_sec" in task

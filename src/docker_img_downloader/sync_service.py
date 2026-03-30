@@ -3,15 +3,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import threading
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from .compose_support import ComposeImageError, extract_images_from_compose_file, extract_images_from_compose_text, normalize_compose_images
@@ -24,6 +27,25 @@ TASK_STATUS_RUNNING = "running"
 TASK_STATUS_SUCCEEDED = "succeeded"
 TASK_STATUS_FAILED = "failed"
 FINAL_STATES = {TASK_STATUS_SUCCEEDED, TASK_STATUS_FAILED}
+MAX_LOG_LINES = 100
+BYTE_UNITS = {
+    "B": 1,
+    "KB": 1000,
+    "MB": 1000**2,
+    "GB": 1000**3,
+    "TB": 1000**4,
+    "KIB": 1024,
+    "MIB": 1024**2,
+    "GIB": 1024**3,
+    "TIB": 1024**4,
+}
+PERCENT_PATTERN = re.compile(r"(?P<percent>\d+(?:\.\d+)?)%")
+BYTE_PROGRESS_PATTERN = re.compile(
+    r"(?P<completed>\d+(?:\.\d+)?)\s*(?P<completed_unit>[KMGT]?i?B)\s*/\s*"
+    r"(?P<total>\d+(?:\.\d+)?)\s*(?P<total_unit>[KMGT]?i?B)",
+    re.IGNORECASE,
+)
+SPEED_PATTERN = re.compile(r"(?P<speed>\d+(?:\.\d+)?)\s*(?P<unit>[KMGT]?i?B/s)", re.IGNORECASE)
 
 
 def utcnow_iso() -> str:
@@ -40,8 +62,22 @@ class SyncTask:
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
+    phase: str = "queued"
+    progress_percent: float | None = None
+    bytes_completed: int | None = None
+    bytes_total: int | None = None
+    speed_bytes_per_sec: float | None = None
+    current_source: str | None = None
+    logs: list[str] | None = None
+    last_updated_at: str | None = None
 
-    def to_dict(self) -> dict[str, str | None]:
+    def __post_init__(self) -> None:
+        if self.logs is None:
+            self.logs = []
+        if self.last_updated_at is None:
+            self.last_updated_at = self.created_at
+
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -58,6 +94,14 @@ class SyncTaskResponse(BaseModel):
     created_at: str
     started_at: str | None = None
     finished_at: str | None = None
+    phase: str
+    progress_percent: float | None = None
+    bytes_completed: int | None = None
+    bytes_total: int | None = None
+    speed_bytes_per_sec: float | None = None
+    current_source: str | None = None
+    logs: list[str]
+    last_updated_at: str | None = None
 
 
 class ComposeSyncRequest(BaseModel):
@@ -68,6 +112,410 @@ class ComposeSyncRequest(BaseModel):
 class ComposeSyncResponse(BaseModel):
     images: list[str]
     tasks: list[SyncTaskResponse]
+
+
+class TaskListResponse(BaseModel):
+    tasks: list[SyncTaskResponse]
+
+
+def _to_bytes(value: str, unit: str) -> int:
+    multiplier = BYTE_UNITS[unit.upper()]
+    return int(float(value) * multiplier)
+
+
+def _parse_progress_line(line: str) -> dict[str, float | int] | None:
+    payload: dict[str, float | int] = {}
+
+    percent_match = PERCENT_PATTERN.search(line)
+    if percent_match:
+        payload["progress_percent"] = float(percent_match.group("percent"))
+
+    byte_match = BYTE_PROGRESS_PATTERN.search(line)
+    if byte_match:
+        payload["bytes_completed"] = _to_bytes(byte_match.group("completed"), byte_match.group("completed_unit"))
+        payload["bytes_total"] = _to_bytes(byte_match.group("total"), byte_match.group("total_unit"))
+        if "progress_percent" not in payload and payload["bytes_total"]:
+            payload["progress_percent"] = round(payload["bytes_completed"] / payload["bytes_total"] * 100, 2)
+
+    speed_match = SPEED_PATTERN.search(line)
+    if speed_match:
+        payload["speed_bytes_per_sec"] = _to_bytes(speed_match.group("speed"), speed_match.group("unit").removesuffix("/s"))
+
+    return payload or None
+
+
+def _detect_phase(line: str) -> str | None:
+    lowered = line.lower()
+    if "login" in lowered or "auth" in lowered:
+        return "login"
+    if "manifest" in lowered:
+        return "resolving"
+    if "pull" in lowered or "copy" in lowered or "download" in lowered or "fetch" in lowered:
+        return "copying"
+    if "push" in lowered or "upload" in lowered or "writing" in lowered:
+        return "pushing"
+    if "done" in lowered or "complete" in lowered or "success" in lowered:
+        return "succeeded"
+    return None
+
+
+def render_dashboard_html() -> str:
+    return """<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Harbor Sync Dashboard</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #0b1020;
+      --panel: #131a2a;
+      --muted: #8ea0bf;
+      --text: #eef4ff;
+      --border: #2a344d;
+      --accent: #60a5fa;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+    }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 16px;
+      min-height: 100vh;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+    h1, h2, h3 { margin: 0 0 12px; }
+    .muted { color: var(--muted); }
+    .stack { display: grid; gap: 12px; }
+    label { display: grid; gap: 6px; font-size: 14px; }
+    input, textarea, button, select {
+      font: inherit;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #0f1728;
+      color: var(--text);
+      padding: 10px 12px;
+      box-sizing: border-box;
+      width: 100%;
+    }
+    textarea { min-height: 160px; resize: vertical; }
+    button {
+      background: var(--accent);
+      color: #08111f;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: transparent;
+      color: var(--text);
+    }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .cards {
+      display: grid;
+      gap: 10px;
+      max-height: calc(100vh - 120px);
+      overflow: auto;
+    }
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      cursor: pointer;
+      background: #0f1728;
+    }
+    .card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .chip {
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+    }
+    .queued { color: var(--warning); }
+    .running { color: var(--accent); }
+    .succeeded { color: var(--success); }
+    .failed { color: var(--danger); }
+    .progress {
+      width: 100%;
+      height: 8px;
+      background: #0b1020;
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    .progress > div {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), #34d399);
+      width: 0%;
+    }
+    pre {
+      margin: 0;
+      padding: 12px;
+      border-radius: 12px;
+      background: #0a0f1c;
+      border: 1px solid var(--border);
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 320px;
+    }
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    @media (max-width: 1100px) {
+      .layout { grid-template-columns: 1fr; }
+      .cards { max-height: none; }
+      .detail-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <div class="stack">
+      <section class="panel stack">
+        <div>
+          <h1>Harbor Sync Dashboard</h1>
+          <div class="muted">查看任务状态、阶段、速度、最近日志。</div>
+        </div>
+        <form id="sync-form" class="stack">
+          <label>单个镜像
+            <input id="source-image" name="source_image" placeholder="docker.io/library/nginx:1.27.4" />
+          </label>
+          <button type="submit">提交同步</button>
+        </form>
+        <form id="compose-form" class="stack">
+          <label>docker-compose YAML
+            <textarea id="compose-yaml" name="compose_yaml" placeholder="services:\n  web:\n    image: nginx:1.27.4"></textarea>
+          </label>
+          <button type="submit">按 Compose 同步</button>
+        </form>
+      </section>
+      <section class="panel stack">
+        <div class="toolbar">
+          <h2>任务列表</h2>
+          <button id="refresh-button" type="button" class="secondary">刷新</button>
+        </div>
+        <div id="task-cards" class="cards"></div>
+      </section>
+    </div>
+    <section class="panel stack">
+      <div class="toolbar">
+        <h2>任务详情</h2>
+        <div id="summary" class="muted">尚未选择任务</div>
+      </div>
+      <div id="task-detail" class="stack muted">等待任务数据…</div>
+    </section>
+  </div>
+  <script>
+    const state = { selectedTaskId: null, tasks: [] };
+
+    function fmtTime(value) {
+      if (!value) return "-";
+      return new Date(value).toLocaleString();
+    }
+
+    function fmtBytes(value) {
+      if (value === null || value === undefined) return "-";
+      const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+      let size = value;
+      let idx = 0;
+      while (size >= 1024 && idx < units.length - 1) {
+        size /= 1024;
+        idx += 1;
+      }
+      return `${size.toFixed(size >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
+    }
+
+    function fmtSpeed(value) {
+      if (value === null || value === undefined) return "-";
+      return `${fmtBytes(value)}/s`;
+    }
+
+    function fmtPercent(value) {
+      if (value === null || value === undefined) return "未知";
+      return `${value.toFixed(1)}%`;
+    }
+
+    function escapeHtml(value) {
+      return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+
+    function renderCards() {
+      const host = document.getElementById("task-cards");
+      if (!state.tasks.length) {
+        host.innerHTML = '<div class="muted">暂无任务。</div>';
+        return;
+      }
+      host.innerHTML = state.tasks.map((task) => {
+        const active = task.task_id === state.selectedTaskId ? "active" : "";
+        const width = Math.max(0, Math.min(100, task.progress_percent ?? 0));
+        return `
+          <div class="card ${active}" data-task-id="${task.task_id}">
+            <div class="row">
+              <strong>${escapeHtml(task.source_image)}</strong>
+              <span class="chip ${task.status}">${task.status}</span>
+              <span class="chip">${task.phase}</span>
+            </div>
+            <div class="muted">${escapeHtml(task.target_image)}</div>
+            <div class="progress" style="margin:10px 0 6px;"><div style="width:${width}%"></div></div>
+            <div class="row muted">
+              <span>${fmtPercent(task.progress_percent)}</span>
+              <span>${fmtSpeed(task.speed_bytes_per_sec)}</span>
+              <span>${fmtTime(task.last_updated_at)}</span>
+            </div>
+          </div>`;
+      }).join("");
+      for (const el of host.querySelectorAll(".card")) {
+        el.addEventListener("click", () => {
+          state.selectedTaskId = el.dataset.taskId;
+          renderCards();
+          renderDetail();
+        });
+      }
+    }
+
+    function renderDetail() {
+      const target = document.getElementById("task-detail");
+      const task = state.tasks.find((item) => item.task_id === state.selectedTaskId) || state.tasks[0];
+      if (!task) {
+        target.innerHTML = '<div class="muted">暂无任务。</div>';
+        document.getElementById("summary").textContent = "尚未选择任务";
+        return;
+      }
+      state.selectedTaskId = task.task_id;
+      document.getElementById("summary").textContent = `${task.status} / ${task.phase}`;
+      target.innerHTML = `
+        <div class="detail-grid">
+          <div>
+            <h3>来源</h3>
+            <div>${escapeHtml(task.source_image)}</div>
+          </div>
+          <div>
+            <h3>目标</h3>
+            <div>${escapeHtml(task.target_image)}</div>
+          </div>
+          <div>
+            <h3>阶段</h3>
+            <div>${escapeHtml(task.phase)}</div>
+          </div>
+          <div>
+            <h3>状态</h3>
+            <div>${escapeHtml(task.status)}</div>
+          </div>
+          <div>
+            <h3>当前源</h3>
+            <div>${escapeHtml(task.current_source || "-")}</div>
+          </div>
+          <div>
+            <h3>消息</h3>
+            <div>${escapeHtml(task.message || "-")}</div>
+          </div>
+          <div>
+            <h3>进度</h3>
+            <div>${fmtPercent(task.progress_percent)} (${fmtBytes(task.bytes_completed)} / ${fmtBytes(task.bytes_total)})</div>
+          </div>
+          <div>
+            <h3>速度</h3>
+            <div>${fmtSpeed(task.speed_bytes_per_sec)}</div>
+          </div>
+          <div>
+            <h3>创建时间</h3>
+            <div>${fmtTime(task.created_at)}</div>
+          </div>
+          <div>
+            <h3>开始时间</h3>
+            <div>${fmtTime(task.started_at)}</div>
+          </div>
+          <div>
+            <h3>结束时间</h3>
+            <div>${fmtTime(task.finished_at)}</div>
+          </div>
+          <div>
+            <h3>最近更新时间</h3>
+            <div>${fmtTime(task.last_updated_at)}</div>
+          </div>
+        </div>
+        <div class="stack">
+          <h3>最近日志</h3>
+          <pre>${escapeHtml((task.logs || []).join("\\n") || "暂无日志")}</pre>
+        </div>`;
+      renderCards();
+    }
+
+    async function refreshTasks() {
+      const response = await fetch("/api/tasks");
+      const payload = await response.json();
+      state.tasks = payload.tasks;
+      if (!state.selectedTaskId && state.tasks.length) {
+        state.selectedTaskId = state.tasks[0].task_id;
+      }
+      renderCards();
+      renderDetail();
+    }
+
+    async function submitJson(url, payload) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "请求失败");
+      }
+      return data;
+    }
+
+    document.getElementById("sync-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const sourceImage = document.getElementById("source-image").value.trim();
+      if (!sourceImage) return;
+      await submitJson("/sync", { source_image: sourceImage });
+      document.getElementById("source-image").value = "";
+      await refreshTasks();
+    });
+
+    document.getElementById("compose-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const composeYaml = document.getElementById("compose-yaml").value.trim();
+      if (!composeYaml) return;
+      await submitJson("/sync/compose", { compose_yaml: composeYaml });
+      await refreshTasks();
+    });
+
+    document.getElementById("refresh-button").addEventListener("click", refreshTasks);
+    refreshTasks();
+    setInterval(refreshTasks, 2000);
+  </script>
+</body>
+</html>"""
 
 
 class TaskManager:
@@ -136,33 +584,92 @@ class TaskManager:
         with self._lock:
             return self._tasks_by_id.get(task_id)
 
-    def _set_status(self, task_id: str, status: str, message: str, *, started: bool = False, finished: bool = False) -> SyncTask:
+    def list_tasks(self, *, limit: int = 100) -> list[SyncTask]:
+        with self._lock:
+            tasks = sorted(self._tasks_by_id.values(), key=lambda task: task.created_at, reverse=True)
+            return tasks[:limit]
+
+    def _update_task(
+        self,
+        task_id: str,
+        *,
+        status: str | None = None,
+        message: str | None = None,
+        phase: str | None = None,
+        started: bool = False,
+        finished: bool = False,
+        progress_percent: float | None = None,
+        bytes_completed: int | None = None,
+        bytes_total: int | None = None,
+        speed_bytes_per_sec: float | None = None,
+        current_source: str | None = None,
+        append_log: str | None = None,
+    ) -> SyncTask:
         with self._lock:
             task = self._tasks_by_id[task_id]
-            task.status = status
-            task.message = message
+            if status is not None:
+                task.status = status
+            if message is not None:
+                task.message = message
+            if phase is not None:
+                task.phase = phase
             if started and task.started_at is None:
                 task.started_at = utcnow_iso()
             if finished:
                 task.finished_at = utcnow_iso()
                 self._active_by_source.pop(task.source_image, None)
+            if progress_percent is not None:
+                task.progress_percent = round(progress_percent, 2)
+            if bytes_completed is not None:
+                task.bytes_completed = bytes_completed
+            if bytes_total is not None:
+                task.bytes_total = bytes_total
+            if speed_bytes_per_sec is not None:
+                task.speed_bytes_per_sec = speed_bytes_per_sec
+            if current_source is not None:
+                task.current_source = current_source
+            if append_log:
+                task.logs.append(append_log)
+                if len(task.logs) > MAX_LOG_LINES:
+                    task.logs = task.logs[-MAX_LOG_LINES:]
+            task.last_updated_at = utcnow_iso()
             self._save_tasks()
             return task
 
     def _run_task(self, task_id: str) -> None:
-        task = self._set_status(task_id, TASK_STATUS_RUNNING, "Task started.", started=True)
+        task = self._update_task(
+            task_id,
+            status=TASK_STATUS_RUNNING,
+            message="Task started.",
+            phase="preparing",
+            started=True,
+        )
         try:
             with self._copy_lock:
-                self._ensure_harbor_login()
-                self._copy_image(task.source_image, task.target_image)
-            self._set_status(task_id, TASK_STATUS_SUCCEEDED, "Image copied to Harbor.", finished=True)
+                self._ensure_harbor_login(task_id)
+                self._copy_image(task_id, task.source_image, task.target_image)
+            self._update_task(
+                task_id,
+                status=TASK_STATUS_SUCCEEDED,
+                message="Image copied to Harbor.",
+                phase="succeeded",
+                progress_percent=100.0,
+                finished=True,
+            )
         except Exception as exc:
-            self._set_status(task_id, TASK_STATUS_FAILED, str(exc), finished=True)
+            self._update_task(
+                task_id,
+                status=TASK_STATUS_FAILED,
+                message=str(exc),
+                phase="failed",
+                finished=True,
+            )
 
-    def _ensure_harbor_login(self) -> None:
+    def _ensure_harbor_login(self, task_id: str) -> None:
         if not self.config.harbor_username or not self.config.harbor_password:
             raise RuntimeError("Harbor credentials are missing.")
 
+        self._update_task(task_id, phase="login", message="Logging in to Harbor.")
         command = [
             self.config.crane_path,
             "auth",
@@ -173,9 +680,9 @@ class TaskManager:
             "-p",
             self.config.harbor_password,
         ]
-        self._run_command(command, "Harbor login failed")
+        self._run_command(task_id, command, "Harbor login failed", phase="login", sensitive=True)
 
-    def _copy_image(self, source_image: str, target_image: str) -> None:
+    def _copy_image(self, task_id: str, source_image: str, target_image: str) -> None:
         parsed = parse_image_reference(source_image)
         mirror_candidates = self.config.registry_mirrors.get(parsed.registry, [])
         source_candidates = [replace_registry(source_image, mirror) for mirror in mirror_candidates]
@@ -183,6 +690,13 @@ class TaskManager:
 
         errors: list[str] = []
         for candidate in source_candidates:
+            self._update_task(
+                task_id,
+                phase="copying",
+                message=f"Copying image from {candidate}.",
+                current_source=candidate,
+                append_log=f"Trying source {candidate}",
+            )
             command = [
                 self.config.crane_path,
                 "copy",
@@ -192,26 +706,60 @@ class TaskManager:
                 target_image,
             ]
             try:
-                self._run_command(command, f"Image copy failed for source {candidate}")
+                self._run_command(task_id, command, f"Image copy failed for source {candidate}", phase="copying", current_source=candidate)
                 return
             except RuntimeError as exc:
                 errors.append(str(exc))
 
         raise RuntimeError(" | ".join(errors))
 
-    def _run_command(self, command: list[str], failure_prefix: str) -> None:
+    def _run_command(
+        self,
+        task_id: str,
+        command: list[str],
+        failure_prefix: str,
+        *,
+        phase: str,
+        current_source: str | None = None,
+        sensitive: bool = False,
+    ) -> None:
         environment = os.environ.copy()
-        completed = subprocess.run(
+        process = subprocess.Popen(
             command,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             env=environment,
-            check=False,
+            bufsize=1,
         )
-        if completed.returncode != 0:
-            stderr = completed.stderr.strip()
-            stdout = completed.stdout.strip()
-            details = stderr or stdout or "no command output"
+
+        captured_lines: list[str] = []
+        if not sensitive:
+            self._update_task(task_id, phase=phase, current_source=current_source, append_log=f"$ {' '.join(command)}")
+
+        assert process.stdout is not None
+        for raw_line in process.stdout:
+            line = raw_line.strip()
+            if not line:
+                continue
+            captured_lines.append(line)
+            progress = _parse_progress_line(line)
+            next_phase = _detect_phase(line) or phase
+            self._update_task(
+                task_id,
+                phase=next_phase,
+                message=line,
+                current_source=current_source,
+                append_log=line,
+                progress_percent=progress["progress_percent"] if progress and "progress_percent" in progress else None,
+                bytes_completed=progress["bytes_completed"] if progress and "bytes_completed" in progress else None,
+                bytes_total=progress["bytes_total"] if progress and "bytes_total" in progress else None,
+                speed_bytes_per_sec=progress["speed_bytes_per_sec"] if progress and "speed_bytes_per_sec" in progress else None,
+            )
+
+        process.wait()
+        if process.returncode != 0:
+            details = " | ".join(captured_lines[-5:]) if captured_lines else "no command output"
             raise RuntimeError(f"{failure_prefix}: {details}")
 
 
@@ -228,9 +776,18 @@ def create_app() -> FastAPI:
     app.state.config = config
     app.state.manager = manager
 
+    @app.get("/", response_class=HTMLResponse)
+    def dashboard() -> HTMLResponse:
+        return HTMLResponse(render_dashboard_html())
+
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/tasks", response_model=TaskListResponse)
+    def list_tasks(limit: int = 100) -> TaskListResponse:
+        tasks = [serialize_task(task) for task in manager.list_tasks(limit=limit)]
+        return TaskListResponse(tasks=tasks)
 
     @app.post("/sync", response_model=SyncTaskResponse)
     def create_sync_task(request: SyncRequest) -> SyncTaskResponse:
@@ -265,6 +822,13 @@ def create_app() -> FastAPI:
 
     @app.get("/tasks/{task_id}", response_model=SyncTaskResponse)
     def get_task(task_id: str) -> SyncTaskResponse:
+        task = manager.get(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found.")
+        return serialize_task(task)
+
+    @app.get("/api/tasks/{task_id}", response_model=SyncTaskResponse)
+    def get_task_api(task_id: str) -> SyncTaskResponse:
         task = manager.get(task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found.")
