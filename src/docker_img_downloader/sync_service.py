@@ -179,127 +179,249 @@ def render_dashboard_html() -> str:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Harbor Sync Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
       color-scheme: light dark;
-      --bg: #0b1020;
-      --panel: #131a2a;
-      --muted: #8ea0bf;
-      --text: #eef4ff;
-      --border: #2a344d;
-      --accent: #60a5fa;
-      --success: #22c55e;
+      --bg: #050505;
+      --bg-panel: rgba(20, 20, 20, 0.6);
+      --bg-card: rgba(30, 30, 30, 0.6);
+      --border: rgba(255, 255, 255, 0.08);
+      --border-hover: rgba(255, 255, 255, 0.2);
+      --text: #ffffff;
+      --muted: #a1a1aa;
+      --accent: #3b82f6;
+      --accent-glow: rgba(59, 130, 246, 0.4);
+      --success: #10b981;
       --warning: #f59e0b;
       --danger: #ef4444;
+      --font-main: 'Outfit', system-ui, sans-serif;
     }
     body {
       margin: 0;
-      font-family: Inter, system-ui, sans-serif;
+      font-family: var(--font-main);
       background: var(--bg);
+      background-image: 
+        radial-gradient(circle at 15% 50%, rgba(59, 130, 246, 0.15), transparent 25%),
+        radial-gradient(circle at 85% 30%, rgba(16, 185, 129, 0.1), transparent 25%);
+      background-attachment: fixed;
       color: var(--text);
+      line-height: 1.5;
     }
     .layout {
       display: grid;
-      grid-template-columns: 360px 1fr;
-      gap: 16px;
-      min-height: 100vh;
-      padding: 16px;
+      grid-template-columns: 400px 1fr;
+      gap: 24px;
+      padding: 24px;
       box-sizing: border-box;
+      max-width: 1600px;
+      margin: 0 auto;
+      min-height: 100vh;
     }
     .panel {
-      background: var(--panel);
+      background: var(--bg-panel);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
       border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 16px;
+      border-radius: 20px;
+      padding: 24px;
       box-sizing: border-box;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
     }
-    h1, h2, h3 { margin: 0 0 12px; }
+    h1 { font-size: 28px; font-weight: 700; margin: 0 0 8px; letter-spacing: -0.5px; }
+    h2 { font-size: 20px; font-weight: 600; margin: 0 0 16px; letter-spacing: -0.3px; }
+    h3 { font-size: 14px; font-weight: 600; margin: 0 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
     .muted { color: var(--muted); }
-    .stack { display: grid; gap: 12px; }
-    label { display: grid; gap: 6px; font-size: 14px; }
+    .stack { display: grid; gap: 16px; }
+    label { display: grid; gap: 8px; font-size: 14px; font-weight: 500; }
     input, textarea, button, select {
       font: inherit;
-      border-radius: 10px;
+      border-radius: 12px;
       border: 1px solid var(--border);
-      background: #0f1728;
+      background: rgba(0, 0, 0, 0.3);
       color: var(--text);
-      padding: 10px 12px;
+      padding: 12px 16px;
       box-sizing: border-box;
       width: 100%;
+      transition: all 0.2s ease;
     }
-    textarea { min-height: 160px; resize: vertical; }
+    input:focus, textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    textarea { min-height: 120px; resize: vertical; }
     button {
       background: var(--accent);
-      color: #08111f;
-      font-weight: 700;
+      color: #ffffff;
+      font-weight: 600;
+      border: none;
       cursor: pointer;
+      box-shadow: 0 4px 12px var(--accent-glow);
+      padding: 14px 16px;
+    }
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px var(--accent-glow);
+      filter: brightness(1.1);
+    }
+    button:active {
+      transform: translateY(0);
     }
     button.secondary {
-      background: transparent;
+      background: rgba(255, 255, 255, 0.05);
       color: var(--text);
+      box-shadow: none;
+      border: 1px solid var(--border);
+      padding: 8px 16px;
+    }
+    button.secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: var(--border-hover);
     }
     .toolbar {
       display: flex;
-      gap: 8px;
+      gap: 12px;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 12px;
+      margin-bottom: 16px;
     }
     .cards {
       display: grid;
-      gap: 10px;
+      gap: 12px;
       max-height: calc(100vh - 120px);
-      overflow: auto;
+      overflow-y: auto;
+      padding-right: 4px;
     }
+    .cards::-webkit-scrollbar { width: 6px; }
+    .cards::-webkit-scrollbar-track { background: transparent; }
+    .cards::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
     .card {
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 12px;
+      border-radius: 16px;
+      padding: 16px;
       cursor: pointer;
-      background: #0f1728;
+      background: var(--bg-card);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative;
+      overflow: hidden;
     }
-    .card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+    .card:hover {
+      border-color: var(--border-hover);
+      transform: translateY(-2px);
+      background: rgba(40, 40, 40, 0.6);
+    }
+    .card.active {
+      border-color: var(--accent);
+      background: rgba(59, 130, 246, 0.05);
+    }
+    .card.active::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; bottom: 0; width: 4px;
+      background: var(--accent);
+      border-top-right-radius: 4px;
+      border-bottom-right-radius: 4px;
+    }
     .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .chip {
-      font-size: 12px;
-      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 10px;
       border-radius: 999px;
-      border: 1px solid var(--border);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
-    .queued { color: var(--warning); }
-    .running { color: var(--accent); }
-    .succeeded { color: var(--success); }
-    .failed { color: var(--danger); }
+    .chip.status { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); }
+    .queued { color: var(--warning); border-color: rgba(245,158,11,0.3) !important; background: rgba(245,158,11,0.1) !important; }
+    .running { color: var(--accent); border-color: rgba(59,130,246,0.3) !important; background: rgba(59,130,246,0.1) !important; }
+    .succeeded { color: var(--success); border-color: rgba(16,185,129,0.3) !important; background: rgba(16,185,129,0.1) !important; }
+    .failed { color: var(--danger); border-color: rgba(239,68,68,0.3) !important; background: rgba(239,68,68,0.1) !important; }
     .progress {
       width: 100%;
-      height: 8px;
-      background: #0b1020;
+      height: 6px;
+      background: rgba(0,0,0,0.5);
       border-radius: 999px;
       overflow: hidden;
-      border: 1px solid var(--border);
+      margin: 14px 0 10px;
     }
     .progress > div {
       height: 100%;
-      background: linear-gradient(90deg, var(--accent), #34d399);
+      background: linear-gradient(90deg, var(--accent), #60a5fa);
       width: 0%;
+      border-radius: 999px;
+      transition: width 0.5s ease;
     }
     pre {
       margin: 0;
-      padding: 12px;
+      padding: 16px;
       border-radius: 12px;
-      background: #0a0f1c;
+      background: rgba(0, 0, 0, 0.4);
       border: 1px solid var(--border);
-      overflow: auto;
+      overflow-x: auto;
       white-space: pre-wrap;
       word-break: break-word;
-      max-height: 320px;
+      max-height: 400px;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 13px;
+      line-height: 1.6;
     }
     .detail-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 20px;
+    }
+    .detail-item {
+      background: rgba(0,0,0,0.15);
+      padding: 16px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.03);
+    }
+    .detail-item-full {
+      grid-column: 1 / -1;
+    }
+    .detail-value {
+      font-size: 15px;
+      word-break: break-all;
+    }
+    .source-target-display {
+      background: rgba(0,0,0,0.2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 20px;
+      display: flex;
+      flex-direction: column;
       gap: 12px;
     }
-    @media (max-width: 1100px) {
+    .source-target-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .st-label {
+      font-size: 12px;
+      color: var(--muted);
+      width: 50px;
+      text-transform: uppercase;
+      font-weight: 600;
+      letter-spacing: 1px;
+    }
+    .st-value {
+      flex: 1;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      background: rgba(0,0,0,0.3);
+      padding: 8px 12px;
+      border-radius: 8px;
+    }
+    .icon-arrow {
+      color: var(--muted);
+      display: flex;
+      justify-content: center;
+    }
+    
+    @media (max-width: 1200px) {
       .layout { grid-template-columns: 1fr; }
       .cards { max-height: none; }
       .detail-grid { grid-template-columns: 1fr; }
@@ -312,54 +434,69 @@ def render_dashboard_html() -> str:
       <section class="panel stack">
         <div>
           <h1>Harbor Sync Dashboard</h1>
-          <div class="muted">查看任务状态、阶段、速度、最近日志，并可直接调试接口。</div>
+          <div class="muted" style="font-size:15px">查看任务状态、阶段、速度、最近日志，并可直接调试接口。</div>
         </div>
+        
+        <div style="border-top: 1px solid var(--border); margin: 8px 0;"></div>
+        
         <form id="sync-form" class="stack">
           <label>单个镜像
-            <input id="source-image" name="source_image" placeholder="docker.io/library/nginx:1.27.4" />
+            <input id="source-image" name="source_image" placeholder="docker.io/library/nginx:1.27.4" autocomplete="off" />
           </label>
           <button type="submit">提交同步</button>
         </form>
+        
+        <div style="border-top: 1px solid var(--border); margin: 8px 0;"></div>
+        
         <form id="compose-form" class="stack">
           <label>docker-compose YAML
             <textarea id="compose-yaml" name="compose_yaml" placeholder="services:\n  web:\n    image: nginx:1.27.4"></textarea>
           </label>
           <label>上传 YAML 文件
-            <input id="compose-file" type="file" accept=".yaml,.yml,text/yaml,text/x-yaml,.txt" />
+            <input id="compose-file" type="file" accept=".yaml,.yml,text/yaml,text/x-yaml,.txt" style="padding: 9px 12px;" />
           </label>
-          <div class="muted" id="compose-file-hint">支持上传 `docker-compose.yaml` / `.yml`，读取后会自动填入文本框。</div>
+          <div class="muted" id="compose-file-hint" style="font-size:13px">支持上传 docker-compose.yaml / .yml，读取后会自动填入文本框。</div>
           <button type="submit">按 Compose 同步</button>
         </form>
+        
+        <div style="border-top: 1px solid var(--border); margin: 8px 0;"></div>
+        
         <form id="manual-sync-form" class="stack">
-          <label>手动发送 `/sync` 请求
-            <textarea id="manual-sync-body" name="manual_sync_body" placeholder='{"source_image":"docker.io/library/nginx:1.27.4"}'></textarea>
+          <label>手动发送 /sync 请求
+            <textarea id="manual-sync-body" name="manual_sync_body" placeholder='{"source_image":"docker.io/library/nginx:1.27.4"}' style="min-height:80px; font-family: monospace;"></textarea>
           </label>
-          <div class="muted">这里直接发送 JSON 到 `POST /sync`，便于调试请求体。</div>
-          <button type="submit">发送 /sync 请求</button>
+          <div class="muted" style="font-size:13px">这里直接发送 JSON 到 POST /sync，便于调试请求体。</div>
+          <button type="submit" class="secondary">发送请求</button>
         </form>
       </section>
-      <section class="panel stack">
+    </div>
+    
+    <div class="stack" style="gap:24px;">
+      <section class="panel stack" style="flex: 1; max-height: 400px; overflow: hidden; display: flex; flex-direction: column;">
         <div class="toolbar">
-          <h2>任务列表</h2>
-          <button id="refresh-button" type="button" class="secondary">刷新</button>
+          <h2 style="margin:0">任务列表</h2>
+          <button id="refresh-button" type="button" class="secondary" style="width: auto;">刷新列表</button>
         </div>
-        <div id="task-cards" class="cards"></div>
+        <div id="task-cards" class="cards" style="padding-bottom:120px;"></div>
+      </section>
+
+      <section class="panel stack" style="flex: 1;">
+        <div class="toolbar" style="margin-bottom: 24px;">
+          <h2 style="margin:0">任务详情</h2>
+          <div id="summary" class="chip status">尚未选择任务</div>
+        </div>
+        <div id="task-detail" class="stack muted">等待任务数据…</div>
       </section>
     </div>
-    <section class="panel stack">
-      <div class="toolbar">
-        <h2>任务详情</h2>
-        <div id="summary" class="muted">尚未选择任务</div>
-      </div>
-      <div id="task-detail" class="stack muted">等待任务数据…</div>
-    </section>
   </div>
+  
   <script>
     const state = { selectedTaskId: null, tasks: [] };
 
     function fmtTime(value) {
       if (!value) return "-";
-      return new Date(value).toLocaleString();
+      const d = new Date(value);
+      return d.toLocaleDateString() + ' ' + d.toLocaleTimeString();
     }
 
     function fmtBytes(value) {
@@ -385,7 +522,8 @@ def render_dashboard_html() -> str:
     }
 
     function escapeHtml(value) {
-      return value
+      if (!value) return "";
+      return String(value)
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;");
@@ -394,7 +532,7 @@ def render_dashboard_html() -> str:
     function renderCards() {
       const host = document.getElementById("task-cards");
       if (!state.tasks.length) {
-        host.innerHTML = '<div class="muted">暂无任务。</div>';
+        host.innerHTML = '<div class="muted" style="padding:16px;text-align:center;border:1px dashed var(--border);border-radius:12px;">暂无任务</div>';
         return;
       }
       host.innerHTML = state.tasks.map((task) => {
@@ -402,17 +540,21 @@ def render_dashboard_html() -> str:
         const width = Math.max(0, Math.min(100, task.progress_percent ?? 0));
         return `
           <div class="card ${active}" data-task-id="${task.task_id}">
-            <div class="row">
-              <strong>${escapeHtml(task.source_image)}</strong>
-              <span class="chip ${task.status}">${task.status}</span>
-              <span class="chip">${task.phase}</span>
+            <div class="row" style="margin-bottom:8px;">
+              <strong style="font-size:15px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(task.source_image)}">
+                ${escapeHtml(task.source_image.split('/').pop())}
+              </strong>
+              <span class="chip status ${task.status}">${task.status}</span>
+              <span class="chip" style="background:rgba(255,255,255,0.05);">${task.phase}</span>
             </div>
-            <div class="muted">${escapeHtml(task.target_image)}</div>
-            <div class="progress" style="margin:10px 0 6px;"><div style="width:${width}%"></div></div>
-            <div class="row muted">
-              <span>${fmtPercent(task.progress_percent)}</span>
+            <div class="muted" style="font-size:12px; font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+              ${escapeHtml(task.target_image)}
+            </div>
+            <div class="progress"><div style="width:${width}%"></div></div>
+            <div class="row muted" style="font-size:12px; justify-content:space-between">
+              <span style="color:var(--text); font-weight:600;">${fmtPercent(task.progress_percent)}</span>
               <span>${fmtSpeed(task.speed_bytes_per_sec)}</span>
-              <span>${fmtTime(task.last_updated_at)}</span>
+              <span>${fmtTime(task.last_updated_at).split(' ')[1] || '-'}</span>
             </div>
           </div>`;
       }).join("");
@@ -431,66 +573,75 @@ def render_dashboard_html() -> str:
       if (!task) {
         target.innerHTML = '<div class="muted">暂无任务。</div>';
         document.getElementById("summary").textContent = "尚未选择任务";
+        document.getElementById("summary").className = "chip status";
         return;
       }
       state.selectedTaskId = task.task_id;
-      document.getElementById("summary").textContent = `${task.status} / ${task.phase}`;
+      
+      const summaryEl = document.getElementById("summary");
+      summaryEl.textContent = `${task.status} • ${task.phase}`;
+      summaryEl.className = `chip status ${task.status}`;
+      
       target.innerHTML = `
-        <div class="detail-grid">
-          <div>
-            <h3>来源</h3>
-            <div>${escapeHtml(task.source_image)}</div>
+        <div class="source-target-display">
+          <div class="source-target-row">
+            <div class="st-label">Src</div>
+            <div class="st-value">${escapeHtml(task.source_image)}</div>
           </div>
-          <div>
-            <h3>目标</h3>
-            <div>${escapeHtml(task.target_image)}</div>
+          <div class="icon-arrow">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>
           </div>
-          <div>
-            <h3>阶段</h3>
-            <div>${escapeHtml(task.phase)}</div>
-          </div>
-          <div>
-            <h3>状态</h3>
-            <div>${escapeHtml(task.status)}</div>
-          </div>
-          <div>
-            <h3>当前源</h3>
-            <div>${escapeHtml(task.current_source || "-")}</div>
-          </div>
-          <div>
-            <h3>本地文件</h3>
-            <div>${escapeHtml(task.local_artifact_path || "-")}</div>
-          </div>
-          <div>
-            <h3>消息</h3>
-            <div>${escapeHtml(task.message || "-")}</div>
-          </div>
-          <div>
-            <h3>进度</h3>
-            <div>${fmtPercent(task.progress_percent)} (${fmtBytes(task.bytes_completed)} / ${fmtBytes(task.bytes_total)})</div>
-          </div>
-          <div>
-            <h3>速度</h3>
-            <div>${fmtSpeed(task.speed_bytes_per_sec)}</div>
-          </div>
-          <div>
-            <h3>创建时间</h3>
-            <div>${fmtTime(task.created_at)}</div>
-          </div>
-          <div>
-            <h3>开始时间</h3>
-            <div>${fmtTime(task.started_at)}</div>
-          </div>
-          <div>
-            <h3>结束时间</h3>
-            <div>${fmtTime(task.finished_at)}</div>
-          </div>
-          <div>
-            <h3>最近更新时间</h3>
-            <div>${fmtTime(task.last_updated_at)}</div>
+          <div class="source-target-row">
+            <div class="st-label">Dst</div>
+            <div class="st-value" style="color:var(--accent);">${escapeHtml(task.target_image)}</div>
           </div>
         </div>
-        <div class="stack">
+        
+        <div class="detail-grid">
+          <div class="detail-item">
+            <h3>阶段 / 状态</h3>
+            <div class="detail-value">
+               <span style="color:var(--text)">${escapeHtml(task.phase)}</span> / 
+               <span class="${task.status}">${escapeHtml(task.status)}</span>
+            </div>
+          </div>
+          <div class="detail-item">
+            <h3>进度 / 速度</h3>
+            <div class="detail-value">
+              <span style="font-weight:600; color:var(--text)">${fmtPercent(task.progress_percent)}</span> 
+              <span style="font-size:13px; color:var(--muted)">(${fmtBytes(task.bytes_completed)} / ${fmtBytes(task.bytes_total)})</span>
+              <br><span style="font-size:13px; color:var(--accent)">${fmtSpeed(task.speed_bytes_per_sec)}</span>
+            </div>
+          </div>
+          <div class="detail-item detail-item-full">
+            <h3>消息</h3>
+            <div class="detail-value" style="color:var(--text)">${escapeHtml(task.message || "-")}</div>
+          </div>
+          <div class="detail-item">
+            <h3>当前源</h3>
+            <div class="detail-value" style="font-family:monospace; font-size:13px;">${escapeHtml(task.current_source || "-")}</div>
+          </div>
+          <div class="detail-item">
+            <h3>本地文件</h3>
+            <div class="detail-value" style="font-family:monospace; font-size:13px;">${escapeHtml(task.local_artifact_path || "-")}</div>
+          </div>
+          <div class="detail-item">
+            <h3>创建/开始时间</h3>
+            <div class="detail-value" style="font-size:13px;">
+              创: ${fmtTime(task.created_at)}<br>
+              始: ${fmtTime(task.started_at)}
+            </div>
+          </div>
+          <div class="detail-item">
+            <h3>结束/更新时间</h3>
+            <div class="detail-value" style="font-size:13px;">
+              终: ${fmtTime(task.finished_at)}<br>
+              更: ${fmtTime(task.last_updated_at)}
+            </div>
+          </div>
+        </div>
+        
+        <div class="stack" style="margin-top:24px;">
           <h3>最近日志</h3>
           <pre>${escapeHtml((task.logs || []).join("\\n") || "暂无日志")}</pre>
         </div>`;
@@ -529,25 +680,47 @@ def render_dashboard_html() -> str:
     document.getElementById("sync-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
+        const btn = event.target.querySelector('button');
+        const origText = btn.textContent;
+        btn.textContent = '提交中...';
+        btn.disabled = true;
+        
         const sourceImage = document.getElementById("source-image").value.trim();
         if (!sourceImage) return;
         await submitJson("/sync", { source_image: sourceImage });
         document.getElementById("source-image").value = "";
         await refreshTasks();
+        
+        btn.textContent = origText;
+        btn.disabled = false;
       } catch (error) {
         showError(error);
+        const btn = event.target.querySelector('button');
+        btn.textContent = '提交同步';
+        btn.disabled = false;
       }
     });
 
     document.getElementById("compose-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
+        const btn = event.target.querySelector('button');
+        const origText = btn.textContent;
+        btn.textContent = '提交中...';
+        btn.disabled = true;
+        
         const composeYaml = document.getElementById("compose-yaml").value.trim();
         if (!composeYaml) return;
         await submitJson("/sync/compose", { compose_yaml: composeYaml });
         await refreshTasks();
+        
+        btn.textContent = origText;
+        btn.disabled = false;
       } catch (error) {
         showError(error);
+        const btn = event.target.querySelector('button');
+        btn.textContent = '按 Compose 同步';
+        btn.disabled = false;
       }
     });
 
@@ -557,22 +730,41 @@ def render_dashboard_html() -> str:
       const text = await file.text();
       document.getElementById("compose-yaml").value = text;
       document.getElementById("compose-file-hint").textContent = `已加载文件：${file.name}`;
+      document.getElementById("compose-file-hint").style.color = "var(--success)";
     });
 
     document.getElementById("manual-sync-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       try {
+        const btn = event.target.querySelector('button');
+        const origText = btn.textContent;
+        btn.textContent = '发送中...';
+        btn.disabled = true;
+        
         const rawBody = document.getElementById("manual-sync-body").value.trim();
         if (!rawBody) return;
         const payload = JSON.parse(rawBody);
         await submitJson("/sync", payload);
         await refreshTasks();
+        
+        btn.textContent = origText;
+        btn.disabled = false;
       } catch (error) {
         showError(error);
+        const btn = event.target.querySelector('button');
+        btn.textContent = '发送请求';
+        btn.disabled = false;
       }
     });
 
-    document.getElementById("refresh-button").addEventListener("click", refreshTasks);
+    document.getElementById("refresh-button").addEventListener("click", () => {
+      refreshTasks().then(() => {
+        const btn = document.getElementById("refresh-button");
+        btn.style.transform = "scale(0.95)";
+        setTimeout(() => btn.style.transform = "none", 150);
+      });
+    });
+    
     refreshTasks();
     setInterval(refreshTasks, 2000);
   </script>
