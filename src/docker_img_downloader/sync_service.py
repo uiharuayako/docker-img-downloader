@@ -539,18 +539,20 @@ def render_dashboard_html() -> str:
         const active = task.task_id === state.selectedTaskId ? "active" : "";
         const width = Math.max(0, Math.min(100, task.progress_percent ?? 0));
         return `
-          <div class="card ${active}" data-task-id="${task.task_id}">
-            <div class="row" style="margin-bottom:8px;">
-              <strong style="font-size:15px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(task.source_image)}">
+          <div class="card ${active}" data-task-id="${task.task_id}" style="padding: 16px; min-height: 110px;">
+            <div class="row" style="margin-bottom:8px; align-items:flex-start;">
+              <strong style="font-size:15px; flex:1; word-break:break-all; line-height:1.4;" title="${escapeHtml(task.source_image)}">
                 ${escapeHtml(task.source_image.split('/').pop())}
               </strong>
-              <span class="chip status ${task.status}">${task.status}</span>
-              <span class="chip" style="background:rgba(255,255,255,0.05);">${task.phase}</span>
+              <div style="display:flex; gap:6px; flex-shrink:0;">
+                <span class="chip status ${task.status}">${task.status}</span>
+                <span class="chip" style="background:rgba(255,255,255,0.05);">${task.phase}</span>
+              </div>
             </div>
-            <div class="muted" style="font-size:12px; font-family:monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+            <div class="muted" style="font-size:12px; font-family:monospace; word-break:break-all; line-height:1.4;">
               ${escapeHtml(task.target_image)}
             </div>
-            <div class="progress"><div style="width:${width}%"></div></div>
+            <div class="progress" style="margin:12px 0 8px;"><div style="width:${width}%"></div></div>
             <div class="row muted" style="font-size:12px; justify-content:space-between">
               <span style="color:var(--text); font-weight:600;">${fmtPercent(task.progress_percent)}</span>
               <span>${fmtSpeed(task.speed_bytes_per_sec)}</span>
